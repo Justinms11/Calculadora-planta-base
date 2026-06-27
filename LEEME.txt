@@ -1,0 +1,5 @@
+Instalación en iPhone:
+1. Suba estos archivos a cualquier hosting (GitHub Pages, Netlify o servidor interno).
+2. Abra el enlace en Safari.
+3. Presione Compartir -> Agregar a pantalla de inicio.
+4. La calculadora quedará instalada como una app y funcionará offline.
