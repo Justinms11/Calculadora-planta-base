@@ -1,0 +1,35 @@
+CALCULADORA PLANTA DE BASE — VERSIÓN 2.0
+
+ARCHIVOS QUE DEBE SUBIR A GITHUB:
+- index.html
+- manifest.json
+- service-worker.js
+- icon-180.png
+- icon-192.png
+- icon-512.png
+
+NOVEDADES:
+- Dosificación de aditivo en cc/kg de cemento.
+- Conversión automática a onzas líquidas estadounidenses.
+- Cemento base: 50 kg/m³.
+- Campo de humedad actual y humedad objetivo.
+- Cálculo del agua a agregar por diferencia de humedad.
+- Datos guardados automáticamente en el teléfono.
+- Botones rápidos de volumen.
+- Resumen grande para el operador.
+- Actualización del sistema offline para mostrar nuevas versiones con mayor facilidad.
+
+PUBLICAR ACTUALIZACIÓN EN GITHUB:
+1. Abra el repositorio.
+2. Entre a Code.
+3. Add file > Upload files.
+4. Arrastre todos los archivos anteriores.
+5. GitHub detectará que index.html, manifest.json y service-worker.js reemplazan versiones anteriores.
+6. Escriba: "Versión 2.0 - agrega aditivo".
+7. Pulse Commit changes.
+8. Espere 1 a 3 minutos.
+9. Abra el enlace de GitHub Pages y actualice.
+10. En la app instalada, pulse "Buscar actualización de la app".
+
+CONVERSIÓN:
+1 onza líquida estadounidense = 29.5735 cc.
