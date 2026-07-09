@@ -1,7 +1,7 @@
 {
   "name": "Calculadora Planta de Base",
   "short_name": "Planta Base",
-  "description": "Dosificación móvil de agregado, cemento, agua y aditivo.",
+  "description": "Dosificación y registro sincronizado con Google Sheets.",
   "id": "./",
   "start_url": "./index.html",
   "scope": "./",

@@ -1,0 +1,603 @@
+/**
+ * API de producción - Planta de Base
+ * Google Apps Script vinculado a Google Sheets.
+ *
+ * Flujo inicial:
+ * 1) Ejecutar configurarSistema() una sola vez.
+ * 2) Implementar como aplicación web.
+ * 3) Usar la URL /exec y el token mostrado desde la PWA.
+ */
+
+const APP = Object.freeze({
+  VERSION: '1.1.0',
+  TIME_ZONE: 'America/Costa_Rica',
+  SHEETS: {
+    PRODUCTIONS: 'DB_Producciones',
+    PROJECTS: 'DB_Proyectos',
+    TRUCKS: 'DB_Camiones',
+    CONFIG: 'DB_Config'
+  },
+  HEADERS: {
+    PRODUCTIONS: [
+      'ID',
+      'FechaProduccion',
+      'FechaRegistroServidor',
+      'ActivoCamion',
+      'Placa',
+      'ProyectoDestino',
+      'Operador',
+      'MetrosCubicos',
+      'CementoKg',
+      'AgregadoKg',
+      'AguaLitros',
+      'AditivoCc',
+      'AditivoOnzasUS',
+      'TiempoBandaSeg',
+      'TiempoAguaSeg',
+      'HumedadObjetivoPct',
+      'HumedadActualPct',
+      'Observaciones',
+      'Estado',
+      'Dispositivo',
+      'UltimaActualizacion'
+    ],
+    PROJECTS: ['ProyectoID', 'Nombre', 'Activo', 'FechaCreacion'],
+    TRUCKS: ['ActivoCamion', 'Placa', 'Descripcion', 'ActivoRegistro', 'FechaCreacion'],
+    CONFIG: ['Clave', 'Valor', 'Descripcion']
+  }
+});
+
+/** Crea un menú dentro de la hoja. */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('Planta Base')
+    .addItem('Configurar sistema', 'configurarSistema')
+    .addItem('Mostrar token de conexión', 'mostrarTokenConexion')
+    .addItem('Regenerar token', 'regenerarTokenConexion')
+    .addToUi();
+}
+
+/** Ejecutar una sola vez desde el editor de Apps Script. */
+function configurarSistema() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    throw new Error('Este script debe estar vinculado a una hoja de Google Sheets.');
+  }
+
+  ss.setSpreadsheetTimeZone(APP.TIME_ZONE);
+
+  const productions = ensureSheet_(ss, APP.SHEETS.PRODUCTIONS, APP.HEADERS.PRODUCTIONS);
+  const projects = ensureSheet_(ss, APP.SHEETS.PROJECTS, APP.HEADERS.PROJECTS);
+  const trucks = ensureSheet_(ss, APP.SHEETS.TRUCKS, APP.HEADERS.TRUCKS);
+  const config = ensureSheet_(ss, APP.SHEETS.CONFIG, APP.HEADERS.CONFIG);
+
+  formatProductionSheet_(productions);
+  formatCatalogSheet_(projects);
+  formatCatalogSheet_(trucks);
+  formatConfigSheet_(config);
+
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('SPREADSHEET_ID', ss.getId());
+  props.setProperty('APP_VERSION', APP.VERSION);
+
+  let token = props.getProperty('API_TOKEN');
+  if (!token) {
+    token = generateToken_();
+    props.setProperty('API_TOKEN', token);
+  }
+
+  updateConfigSheet_(config, token);
+
+  const message = [
+    'Sistema configurado correctamente.',
+    '',
+    'Token de conexión:',
+    token,
+    '',
+    'Guárdelo. La PWA lo solicitará una vez por dispositivo.'
+  ].join('\n');
+
+  console.log(message);
+  SpreadsheetApp.getUi().alert('Configuración completada', message, SpreadsheetApp.getUi().ButtonSet.OK);
+  return { ok: true, token: token, spreadsheetId: ss.getId() };
+}
+
+function mostrarTokenConexion() {
+  const token = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
+  if (!token) {
+    SpreadsheetApp.getUi().alert('Primero ejecute “Configurar sistema”.');
+    return;
+  }
+  SpreadsheetApp.getUi().alert('Token de conexión', token, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+function regenerarTokenConexion() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert(
+    'Regenerar token',
+    'Los dispositivos conectados dejarán de sincronizar hasta que ingresen el token nuevo. ¿Continuar?',
+    ui.ButtonSet.YES_NO
+  );
+  if (response !== ui.Button.YES) return;
+
+  const token = generateToken_();
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('API_TOKEN', token);
+
+  const ss = getSpreadsheet_();
+  const config = ss.getSheetByName(APP.SHEETS.CONFIG);
+  updateConfigSheet_(config, token);
+
+  ui.alert('Token nuevo', token, ui.ButtonSet.OK);
+}
+
+/** Endpoint HTTP GET. Soporta JSON y JSONP para la PWA alojada en GitHub Pages. */
+function doGet(e) {
+  const params = (e && e.parameter) || {};
+  const callback = String(params.callback || '').trim();
+
+  try {
+    const action = String(params.action || 'health').trim();
+    let payload;
+
+    if (action === 'health') {
+      payload = {
+        ok: true,
+        service: 'Planta Base API',
+        version: APP.VERSION,
+        serverTime: new Date().toISOString()
+      };
+      return output_(payload, callback);
+    }
+
+    validateToken_(params.token);
+
+    switch (action) {
+      case 'catalogs':
+        payload = getCatalogs_();
+        break;
+      case 'productions':
+        payload = listProductions_(params);
+        break;
+      default:
+        throw new Error('Acción GET no reconocida: ' + action);
+    }
+
+    return output_(payload, callback);
+  } catch (error) {
+    console.error(error && error.stack ? error.stack : error);
+    return output_({
+      ok: false,
+      error: error && error.message ? error.message : String(error),
+      serverTime: new Date().toISOString()
+    }, callback);
+  }
+}
+
+function output_(payload, callback) {
+  if (callback) {
+    if (!/^[A-Za-z_$][0-9A-Za-z_$\\.]{0,120}$/.test(callback)) {
+      throw new Error('Callback JSONP inválido.');
+    }
+    return ContentService
+      .createTextOutput(callback + '(' + JSON.stringify(payload) + ');')
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
+  return json_(payload);
+}
+
+/** Endpoint HTTP POST. */
+function doPost(e) {
+  try {
+    const body = parseRequestBody_(e);
+    validateToken_(body.token);
+
+    const action = String(body.action || '').trim();
+    let result;
+
+    switch (action) {
+      case 'saveProduction':
+        result = saveProduction_(body.production || body.data || body);
+        break;
+      case 'voidProduction':
+        result = voidProduction_(body);
+        break;
+      case 'upsertProject':
+        result = upsertProject_(body.project || body.data || body);
+        break;
+      case 'upsertTruck':
+        result = upsertTruck_(body.truck || body.data || body);
+        break;
+      default:
+        throw new Error('Acción POST no reconocida: ' + action);
+    }
+
+    return json_(result);
+  } catch (error) {
+    return errorJson_(error);
+  }
+}
+
+function saveProduction_(data) {
+  const required = ['id', 'fecha', 'camion', 'proyecto'];
+  required.forEach(function (field) {
+    if (data[field] === undefined || data[field] === null || String(data[field]).trim() === '') {
+      throw new Error('Falta el campo obligatorio: ' + field);
+    }
+  });
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+
+  try {
+    const ss = getSpreadsheet_();
+    const sheet = ss.getSheetByName(APP.SHEETS.PRODUCTIONS);
+    const id = safeText_(data.id, 120);
+
+    const existingRow = findExactRow_(sheet, 1, id);
+    if (existingRow) {
+      return {
+        ok: true,
+        duplicate: true,
+        message: 'El registro ya existía y no se duplicó.',
+        id: id,
+        row: existingRow
+      };
+    }
+
+    const now = new Date();
+    const row = [
+      id,
+      parseDate_(data.fecha),
+      now,
+      safeText_(data.camion, 100),
+      safeText_(data.placa || '', 50),
+      safeText_(data.proyecto, 180),
+      safeText_(data.operador || '', 120),
+      number_(data.m3),
+      number_(data.cemento),
+      number_(data.agregado),
+      number_(data.agua),
+      number_(data.aditivoCc !== undefined ? data.aditivoCc : data.cc),
+      number_(data.aditivoOz !== undefined ? data.aditivoOz : data.oz),
+      number_(data.tiempoBanda !== undefined ? data.tiempoBanda : data.banda),
+      number_(data.tiempoAgua !== undefined ? data.tiempoAgua : data.tAgua),
+      number_(data.humedadObjetivo !== undefined ? data.humedadObjetivo : data.humObj),
+      number_(data.humedadActual !== undefined ? data.humedadActual : data.humAct),
+      safeText_(data.notas || data.observaciones || '', 1000),
+      safeText_(data.estado || 'ACTIVO', 30),
+      safeText_(data.dispositivo || '', 200),
+      now
+    ];
+
+    const nextRow = sheet.getLastRow() + 1;
+    sheet.getRange(nextRow, 1, 1, row.length).setValues([row]);
+
+    return {
+      ok: true,
+      duplicate: false,
+      message: 'Producción guardada.',
+      id: id,
+      row: nextRow,
+      serverTime: now.toISOString()
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function voidProduction_(body) {
+  const id = String(body.id || '').trim();
+  if (!id) throw new Error('Falta el ID de la producción.');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+
+  try {
+    const sheet = getSpreadsheet_().getSheetByName(APP.SHEETS.PRODUCTIONS);
+    const row = findExactRow_(sheet, 1, id);
+    if (!row) throw new Error('No se encontró la producción: ' + id);
+
+    const headers = APP.HEADERS.PRODUCTIONS;
+    sheet.getRange(row, headers.indexOf('Estado') + 1).setValue('ANULADO');
+    sheet.getRange(row, headers.indexOf('UltimaActualizacion') + 1).setValue(new Date());
+
+    if (body.motivo) {
+      const notesColumn = headers.indexOf('Observaciones') + 1;
+      const current = String(sheet.getRange(row, notesColumn).getValue() || '');
+      const extra = '[ANULADO] ' + safeText_(body.motivo, 500);
+      sheet.getRange(row, notesColumn).setValue(current ? current + '\n' + extra : extra);
+    }
+
+    return { ok: true, id: id, estado: 'ANULADO' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function listProductions_(params) {
+  const sheet = getSpreadsheet_().getSheetByName(APP.SHEETS.PRODUCTIONS);
+  const values = sheet.getDataRange().getValues();
+  const headers = values.shift() || [];
+
+  const requestedLimit = Math.floor(number_(params.limit || 200));
+  const limit = Math.max(1, Math.min(requestedLimit || 200, 1000));
+  const since = params.since ? new Date(params.since) : null;
+
+  let rows = values.map(function (row) {
+    return rowToObject_(headers, row);
+  });
+
+  if (since && !isNaN(since.getTime())) {
+    rows = rows.filter(function (item) {
+      const date = new Date(item.UltimaActualizacion || item.FechaRegistroServidor || item.FechaProduccion);
+      return !isNaN(date.getTime()) && date >= since;
+    });
+  }
+
+  rows.sort(function (a, b) {
+    const da = new Date(a.FechaProduccion || 0).getTime() || 0;
+    const db = new Date(b.FechaProduccion || 0).getTime() || 0;
+    return db - da;
+  });
+
+  return {
+    ok: true,
+    count: Math.min(rows.length, limit),
+    totalMatched: rows.length,
+    productions: rows.slice(0, limit),
+    serverTime: new Date().toISOString()
+  };
+}
+
+function getCatalogs_() {
+  const ss = getSpreadsheet_();
+  return {
+    ok: true,
+    projects: getActiveCatalogRows_(ss.getSheetByName(APP.SHEETS.PROJECTS), 'Activo'),
+    trucks: getActiveCatalogRows_(ss.getSheetByName(APP.SHEETS.TRUCKS), 'ActivoRegistro'),
+    serverTime: new Date().toISOString()
+  };
+}
+
+function upsertProject_(data) {
+  const name = String(data.nombre || data.proyecto || '').trim();
+  if (!name) throw new Error('Falta el nombre del proyecto.');
+
+  const id = String(data.id || data.proyectoId || slug_(name)).trim();
+  return upsertCatalogRow_(
+    APP.SHEETS.PROJECTS,
+    APP.HEADERS.PROJECTS,
+    id,
+    [safeText_(id, 100), safeText_(name, 180), boolean_(data.activo, true), new Date()]
+  );
+}
+
+function upsertTruck_(data) {
+  const asset = String(data.camion || data.activoCamion || data.activo || '').trim();
+  if (!asset) throw new Error('Falta el activo del camión.');
+
+  return upsertCatalogRow_(
+    APP.SHEETS.TRUCKS,
+    APP.HEADERS.TRUCKS,
+    asset,
+    [
+      safeText_(asset, 100),
+      safeText_(data.placa || '', 50),
+      safeText_(data.descripcion || '', 180),
+      boolean_(data.activoRegistro, true),
+      new Date()
+    ]
+  );
+}
+
+function upsertCatalogRow_(sheetName, headers, key, rowValues) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+
+  try {
+    const sheet = getSpreadsheet_().getSheetByName(sheetName);
+    const row = findExactRow_(sheet, 1, key);
+    const targetRow = row || sheet.getLastRow() + 1;
+    sheet.getRange(targetRow, 1, 1, headers.length).setValues([rowValues]);
+    return { ok: true, created: !row, row: targetRow, key: key };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function ensureSheet_(ss, name, headers) {
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) sheet = ss.insertSheet(name);
+
+  const currentHeaders = sheet.getRange(1, 1, 1, headers.length).getDisplayValues()[0];
+  const isBlank = currentHeaders.every(function (value) { return !value; });
+  const differs = headers.some(function (header, index) { return currentHeaders[index] !== header; });
+
+  if (isBlank || differs) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
+
+  sheet.setFrozenRows(1);
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange
+    .setFontWeight('bold')
+    .setBackground('#0f172a')
+    .setFontColor('#ffffff')
+    .setHorizontalAlignment('center');
+
+  return sheet;
+}
+
+function formatProductionSheet_(sheet) {
+  sheet.setColumnWidth(1, 210);
+  sheet.setColumnWidths(2, 2, 155);
+  sheet.setColumnWidths(4, 4, 145);
+  sheet.setColumnWidths(8, 10, 120);
+  sheet.setColumnWidth(18, 320);
+  sheet.getRange('B:C').setNumberFormat('dd/MM/yyyy HH:mm:ss');
+  sheet.getRange('H:Q').setNumberFormat('0.00');
+  sheet.getRange('U:U').setNumberFormat('dd/MM/yyyy HH:mm:ss');
+}
+
+function formatCatalogSheet_(sheet) {
+  sheet.autoResizeColumns(1, sheet.getLastColumn());
+  sheet.getRange('D:D').setNumberFormat('dd/MM/yyyy HH:mm:ss');
+}
+
+function formatConfigSheet_(sheet) {
+  sheet.setColumnWidth(1, 220);
+  sheet.setColumnWidth(2, 260);
+  sheet.setColumnWidth(3, 430);
+}
+
+function updateConfigSheet_(sheet, token) {
+  const rows = [
+    ['APP_VERSION', APP.VERSION, 'Versión del servicio'],
+    ['TIME_ZONE', APP.TIME_ZONE, 'Zona horaria usada por la hoja'],
+    ['API_TOKEN_ULTIMOS_4', token.slice(-4), 'El token completo está en Propiedades del script'],
+    ['CONFIGURADO_EN', new Date(), 'Última configuración del sistema']
+  ];
+
+  if (sheet.getLastRow() > 1) {
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).clearContent();
+  }
+  sheet.getRange(2, 1, rows.length, 3).setValues(rows);
+  sheet.getRange('B5').setNumberFormat('dd/MM/yyyy HH:mm:ss');
+}
+
+function getActiveCatalogRows_(sheet, activeHeader) {
+  const values = sheet.getDataRange().getValues();
+  const headers = values.shift() || [];
+  return values
+    .filter(function (row) {
+      if (row.every(function (value) { return value === ''; })) return false;
+      const obj = rowToObject_(headers, row);
+      return boolean_(obj[activeHeader], true);
+    })
+    .map(function (row) { return rowToObject_(headers, row); });
+}
+
+function getSpreadsheet_() {
+  const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+  if (!id) {
+    throw new Error('Sistema no configurado. Ejecute configurarSistema().');
+  }
+  return SpreadsheetApp.openById(id);
+}
+
+function parseRequestBody_(e) {
+  if (!e) return {};
+
+  const contents = e.postData && e.postData.contents ? String(e.postData.contents).trim() : '';
+  if (contents) {
+    try {
+      return JSON.parse(contents);
+    } catch (ignored) {
+      // Permite payload={...} enviado como formulario.
+    }
+  }
+
+  const params = e.parameter || {};
+  if (params.payload) {
+    return JSON.parse(params.payload);
+  }
+  return params;
+}
+
+function validateToken_(received) {
+  const expected = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
+  if (!expected) throw new Error('El token del servidor no está configurado.');
+  if (!constantTimeEquals_(String(received || ''), expected)) {
+    throw new Error('Token de conexión inválido.');
+  }
+}
+
+function constantTimeEquals_(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+function findExactRow_(sheet, column, value) {
+  if (sheet.getLastRow() < 2) return 0;
+  const range = sheet.getRange(2, column, sheet.getLastRow() - 1, 1);
+  const found = range.createTextFinder(String(value)).matchEntireCell(true).findNext();
+  return found ? found.getRow() : 0;
+}
+
+function rowToObject_(headers, row) {
+  const obj = {};
+  headers.forEach(function (header, index) {
+    obj[header] = serializeValue_(row[index]);
+  });
+  return obj;
+}
+
+function serializeValue_(value) {
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
+    return value.toISOString();
+  }
+  return value;
+}
+
+function parseDate_(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  return isNaN(date.getTime()) ? new Date() : date;
+}
+
+function number_(value) {
+  if (value === '' || value === null || value === undefined) return 0;
+  const normalized = typeof value === 'string' ? value.replace(',', '.') : value;
+  const result = Number(normalized);
+  if (!Number.isFinite(result)) return 0;
+  return result;
+}
+
+function boolean_(value, defaultValue) {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  return ['true', '1', 'si', 'sí', 'yes', 'activo'].indexOf(normalized) !== -1;
+}
+
+function safeText_(value, maxLength) {
+  let text = String(value === undefined || value === null ? '' : value).trim();
+  if (/^[=+\-@]/.test(text)) text = "'" + text;
+  return text.slice(0, maxLength || 500);
+}
+
+function slug_(text) {
+  return String(text)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || Utilities.getUuid();
+}
+
+function generateToken_() {
+  return (
+    Utilities.getUuid().replace(/-/g, '') +
+    Utilities.getUuid().replace(/-/g, '')
+  );
+}
+
+function json_(payload) {
+  return ContentService
+    .createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function errorJson_(error) {
+  console.error(error && error.stack ? error.stack : error);
+  return json_({
+    ok: false,
+    error: error && error.message ? error.message : String(error),
+    serverTime: new Date().toISOString()
+  });
+}

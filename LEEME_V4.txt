@@ -1,0 +1,44 @@
+PLANTA BASE — VERSIÓN 4.0
+
+1. ACTUALIZAR APPS SCRIPT
+- Abra Extensiones > Apps Script.
+- Reemplace Code.gs por el contenido de Code_Google_Apps_Script_v1_1.gs.txt.
+- Guarde.
+- Implementar > Administrar implementaciones.
+- Edite la implementación actual.
+- En "Versión", seleccione "Nueva versión".
+- Implemente y conserve la misma URL /exec.
+
+La actualización 1.1 agrega JSONP para que la PWA de GitHub pueda leer el historial compartido sin problemas de CORS.
+
+2. ACTUALIZAR GITHUB
+Suba y reemplace:
+- index.html
+- manifest.json
+- service-worker.js
+- icon-180.png
+- icon-192.png
+- icon-512.png
+
+Mensaje sugerido:
+Versión 4.0 - sincronización Google Sheets
+
+3. CONFIGURAR CADA DISPOSITIVO
+- Abra la app.
+- Entre en Conexión.
+- La URL ya aparece preconfigurada:
+  https://script.google.com/macros/s/AKfycbyQ2hsoJLPkAnlaANt-u75oGTPlgOe0cVJYRd5khfpeV5fcoM_UxnAEIHddgcy3L5oV/exec
+- Pegue el token manualmente.
+- Asigne un nombre al dispositivo.
+- Pulse Guardar y probar.
+
+SEGURIDAD:
+El token NO está incluido en index.html ni en GitHub.
+Queda guardado únicamente en el navegador de cada dispositivo.
+
+FUNCIONAMIENTO:
+- Cada producción se guarda primero localmente.
+- Sin internet queda PENDIENTE.
+- Al recuperar conexión se intenta sincronizar.
+- La app descarga el historial compartido desde Google Sheets.
+- Los registros sincronizados pueden anularse, no borrarse.
