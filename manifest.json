@@ -1,7 +1,7 @@
 {
   "name": "Calculadora Planta de Base",
   "short_name": "Planta Base",
-  "description": "Dosificación y registro sincronizado con Google Sheets.",
+  "description": "Dosificación y registro sincronizado con Google Sheets, con m³ por camión.",
   "id": "./",
   "start_url": "./index.html",
   "scope": "./",

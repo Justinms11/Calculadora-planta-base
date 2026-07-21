@@ -1,0 +1,14 @@
+PLANTA BASE — VERSIÓN 4.1
+
+NOVEDAD:
+- Agrega campo obligatorio en Registro: m³ del camión.
+- Cada camión puede registrarse con un volumen diferente sin cambiar la pantalla principal de cálculo.
+- El cálculo de cemento, agregado, agua, banda y aditivo del registro se hace usando esos m³ del camión.
+
+ACTUALIZAR GITHUB:
+1. Suba index.html, manifest.json, service-worker.js y los tres iconos.
+2. Commit sugerido: Versión 4.1 - agrega m³ por camión.
+3. Espere Actions en verde.
+4. En la app instalada, entre a Conexión > Actualizar aplicación.
+
+No hace falta cambiar Apps Script.

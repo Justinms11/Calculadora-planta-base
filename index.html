@@ -84,8 +84,8 @@
 <div class="container">
   <header>
     <h1>Calculadora Planta de Base ⚙️</h1>
-    <div class="subtitle">Dosificación, registro por camión y sincronización compartida con Google Sheets.</div>
-    <span class="version">Versión 4.0 · Sincronización</span>
+    <div class="subtitle">Dosificación, registro por camión y sincronización compartida con Google Sheets. Incluye m³ por camión.</div>
+    <span class="version">Versión 4.1 · Sincronización</span>
   </header>
 
   <div class="tabs">
@@ -168,6 +168,7 @@
       <div class="note">Se guardará localmente de inmediato y se enviará a Google Sheets cuando exista conexión.</div>
       <div class="grid two">
         <div><label for="fecha">Fecha y hora</label><input id="fecha" type="datetime-local"></div>
+        <div><label for="m3Camion">m³ del camión</label><input id="m3Camion" type="number" inputmode="decimal" value="2" step="0.01"></div>
         <div><label for="camion">Activo del camión</label><input id="camion" list="camionesLista" placeholder="Ej. C-124"></div>
         <div><label for="placa">Placa (opcional)</label><input id="placa" placeholder="Ej. ABC-123"></div>
         <div><label for="proyecto">Proyecto destino</label><input id="proyecto" list="proyectosLista" placeholder="Ej. Ruta 35"></div>
@@ -249,7 +250,7 @@ function showTab(t){
     document.getElementById("p"+x[0].toUpperCase()+x.slice(1)).classList.toggle("active",x===t);
     document.getElementById("t"+x[0].toUpperCase()+x.slice(1)).classList.toggle("active",x===t);
   });
-  if(t==="reg"){render(); if(configured()&&navigator.onLine) pullRemoto(true)}
+  if(t==="reg"){if(!document.getElementById("m3Camion").value)document.getElementById("m3Camion").value=document.getElementById("m3").value;render(); if(configured()&&navigator.onLine) pullRemoto(true)}
   if(t==="sync") updateStats();
   scrollTo({top:0,behavior:"smooth"});
 }
@@ -257,8 +258,10 @@ function localDate(){const d=new Date(),o=d.getTimezoneOffset()*60000;return new
 function uid(){return "PB-"+Date.now().toString(36).toUpperCase()+"-"+crypto.getRandomValues(new Uint32Array(1))[0].toString(36).toUpperCase()}
 function esc(v){return String(v??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;")}
 function setM3(v){document.getElementById("m3").value=v;calcular()}
-function calcData(){
-  const m3=n("m3"),cemento=m3*n("cementoM3"),agregado=m3*n("densidad");
+function calcData(m3Override=null){
+  const baseM3 = m3Override === null ? n("m3") : Number(m3Override);
+  const m3 = Number.isFinite(baseM3) ? baseM3 : 0;
+  const cemento=m3*n("cementoM3"),agregado=m3*n("densidad");
   const flujo=n("largo")>0?(n("peso")/n("largo"))*n("vel"):0,banda=flujo>0?agregado/flujo:0;
   const dh=Math.max(n("humObj")-n("humAct"),0),agua=agregado*dh/100;
   const q=n("aguaSeg")>0?n("aguaRef")/n("aguaSeg"):0,tAgua=q>0?agua/q:0;
@@ -329,12 +332,14 @@ async function apiPost(payload,allowOpaque=true){
 function records(){try{return JSON.parse(localStorage.getItem(RECORD_KEY)||"[]")}catch{return []}}
 function saveRecords(a){localStorage.setItem(RECORD_KEY,JSON.stringify(a));updateStats()}
 function upsertLocal(r){const a=records(),i=a.findIndex(x=>x.id===r.id);if(i>=0)a[i]={...a[i],...r};else a.unshift(r);saveRecords(a)}
-function limpiarForm(){["camion","placa","proyecto","operador","notas"].forEach(id=>document.getElementById(id).value="");document.getElementById("fecha").value=localDate()}
+function limpiarForm(){["camion","placa","proyecto","operador","notas"].forEach(id=>document.getElementById(id).value="");document.getElementById("fecha").value=localDate();document.getElementById("m3Camion").value=document.getElementById("m3").value}
 function saveStatus(type,msg){const d=document.getElementById("saveDot");d.className="dot "+type;document.getElementById("saveMsg").textContent=msg}
 async function guardarProduccion(){
   const camion=document.getElementById("camion").value.trim(),proyecto=document.getElementById("proyecto").value.trim();
+  const m3Camion=parseFloat(document.getElementById("m3Camion").value)||0;
+  if(m3Camion<=0)return alert("Ingrese los m³ del camión.");
   if(!camion)return alert("Ingrese el activo del camión.");if(!proyecto)return alert("Ingrese el proyecto destino.");
-  const x=calcData(),c=getConn();
+  const x=calcData(m3Camion),c=getConn();
   const r={id:uid(),fecha:document.getElementById("fecha").value||localDate(),camion,placa:document.getElementById("placa").value.trim(),
     proyecto,operador:document.getElementById("operador").value.trim(),notas:document.getElementById("notas").value.trim(),
     m3:x.m3,cemento:x.cemento,agregado:x.agregado,agua:x.agua,aditivoCc:x.cc,aditivoOz:x.oz,tiempoBanda:x.banda,tiempoAgua:x.tAgua,
@@ -424,7 +429,7 @@ function borrarDatosLocales(){if(confirm("¿Borrar configuración, cálculos e h
 async function actualizarApp(btn){const old=btn.textContent;btn.textContent="Actualizando…";try{const rs=await navigator.serviceWorker.getRegistrations();await Promise.all(rs.map(r=>r.update()));setTimeout(()=>location.reload(),700)}catch{location.reload()}finally{setTimeout(()=>btn.textContent=old,1200)}}
 
 calcIds.forEach(id=>document.getElementById(id).addEventListener("input",calcular));
-document.getElementById("fecha").value=localDate();loadCalc();loadConn();render();updateStats();
+document.getElementById("fecha").value=localDate();loadCalc();document.getElementById("m3Camion").value=document.getElementById("m3").value;loadConn();render();updateStats();
 window.addEventListener("online",()=>{histStatus("ok","Conexión recuperada. Sincronizando…");syncTodo()});
 window.addEventListener("offline",()=>histStatus("wait","Sin internet; los nuevos registros quedarán pendientes."));
 if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("./service-worker.js"));
